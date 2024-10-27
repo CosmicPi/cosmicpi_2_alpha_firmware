@@ -59,8 +59,6 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 #define RPI_extra_Pin GPIO_PIN_0
 #define RPI_extra_GPIO_Port GPIOA
-#define gpstx_Pin GPIO_PIN_3
-#define gpstx_GPIO_Port GPIOA
 #define biasfb0_Pin GPIO_PIN_4
 #define biasfb0_GPIO_Port GPIOA
 #define biasfb1_Pin GPIO_PIN_5
@@ -75,10 +73,10 @@ void Error_Handler(void);
 #define evt_led_GPIO_Port GPIOA
 #define GPSPPS_Pin GPIO_PIN_15
 #define GPSPPS_GPIO_Port GPIOA
-#define CH_A_OR_Pin GPIO_PIN_11
-#define CH_A_OR_GPIO_Port GPIOC
-#define CH_B_OR_Pin GPIO_PIN_12
-#define CH_B_OR_GPIO_Port GPIOC
+#define ch_b_or_Pin GPIO_PIN_11
+#define ch_b_or_GPIO_Port GPIOC
+#define ch_a_or_Pin GPIO_PIN_12
+#define ch_a_or_GPIO_Port GPIOC
 #define trig_out_Pin GPIO_PIN_3
 #define trig_out_GPIO_Port GPIOB
 

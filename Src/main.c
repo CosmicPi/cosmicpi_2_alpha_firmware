@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+//#include "stdlib.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -41,6 +42,7 @@
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
+DMA_HandleTypeDef hdma_adc1;
 
 IWDG_HandleTypeDef hiwdg;
 
@@ -69,7 +71,165 @@ static void MX_IWDG_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+uint8_t TextOutBuf[1024];
+uint8_t Bbuffer[1024];
+static uint8_t tx_buffer[1000];
+uint8_t Is_First_Captured = 0;  // 0- not captured, 1- captured
 
+uint32_t Evt_stack =0; //number of cosmic ray events this second
+uint32_t Evt_timestamps[30]; //space for 30 events per second, no overflow as yet!
+uint32_t Evt_total = 0; //total events since start of operation
+uint32_t gps_timestamp =0; //value of TIM2 when GPS PPS arrives.
+
+uint8_t data_ready=0; //flag for data ready to send to UART1 via DMA.
+uint8_t pps_started=0;
+
+
+void WatchdogRefresh(void) {
+	HAL_IWDG_Refresh(&hiwdg);
+}
+
+void debugPrint(UART_HandleTypeDef *huart, char _out[])
+{
+	HAL_UART_Transmit(huart, (uint8_t *) _out, strlen(_out), 10);
+}
+
+void debugPrintln(UART_HandleTypeDef *huart, char _out[])
+{
+	HAL_UART_Transmit(huart, (uint8_t *) _out, strlen(_out), 10);
+	char newline[2] = "\r\n";
+	HAL_UART_Transmit(huart, (uint8_t *) newline, 2, 10);
+}
+
+//struct __FILE {
+//	int dummy;
+//};
+//declare a file
+//FILE __stdout;
+
+//int fputc(int ch, FILE *f){
+//	HAL_UART_Transmit(&huart1, (uint8_t *)&ch, 1, 0xFFFF);
+//	return ch;
+//}
+
+static void tx_com(uint8_t *tx_buffer, uint16_t len)
+{
+	HAL_UART_Transmit(&huart1, tx_buffer, len, 1000);
+}
+
+void print_buffer(void)
+{
+	//TextOutBufSize = strlen(TextOutBuf); //check characters in buffer
+	if (strlen(TextOutBuf) >0 )
+	{
+		//print one if there is a character to print
+		//problem here, it only transmits the first letter, over and over
+		//see if there's a DMA route?
+		//DMA instruction to buffer -> UART would be ideal.
+		HAL_UART_Transmit(&huart1, TextOutBuf, 1, 1000);
+		//HAL_UART_Transmit(&huart1, TextOutBuf, strlen(TextOutBuf), 1000);
+	}
+	//if (strlen(TextOutBuf)==0 )
+	//{
+	//memset(&TextOutBuf[0], 0, sizeof(TextOutBuf));
+	//}
+}
+
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
+{
+	HAL_NVIC_DisableIRQ(TIM2_IRQn); //disable interrupts on call, regardless of type. renable at the end.
+	//memset(TextOutBuf,0,strlen(TextOutBuf));
+
+	debugPrint(&huart1, "TIM2\r\n");
+
+	if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1)  // if interrput source is channel 1
+	{
+		pps_started = 1;
+		//here we are in the PPS case. Clear the buffer
+		memset(TextOutBuf,0,strlen(TextOutBuf));
+
+
+		debugPrint(&huart1, "GPSPPS\r\n");
+		HAL_GPIO_TogglePin(pwr_led_GPIO_Port,pwr_led_Pin);
+		sprintf((char*)TextOutBuf+strlen(TextOutBuf), "PPS: GPS lock:1;\r\n");
+
+
+		{
+			//normal operation mode
+			debugPrint(&huart1, "PPS\r\n");
+			//oldtimestamp = gps_timestamp; //backup the old value
+			gps_timestamp = HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_1);  // capture the first value
+
+			//HAL_GPIO_WritePin(evt_led_GPIO_Port, evt_led_Pin,  GPIO_PIN_SET);
+
+			//here goes the code to do the readouts; write second
+			//readout events
+			//readout secondary data
+			//now reset the counter to 0;
+			//print sensors was here, moving to main loop
+			//bme_readout();
+			//read_imu();
+			//avg_temp_print();
+
+			if (Evt_stack > 0) {
+				uint16_t evt_ct = Evt_stack;
+				while (evt_ct > 0) {
+					//for (uint8_t prt_ctr=0; prt_ctr<=(Evt_stack); prt_ctr++)
+					//{
+					sprintf((char*)TextOutBuf+strlen(TextOutBuf), "Event: sub second micros:%d/%d; Event Count:%d\r\n", Evt_timestamps[evt_ct], gps_timestamp, (Evt_total+evt_ct));
+					evt_ct--;
+					//sprintf((char*)TextOutBuf, "GPS_PPS\r\n");
+
+				}
+			}
+			Evt_total = Evt_total+Evt_stack; //increment total events
+
+			//HAL_GPIO_TogglePin(pwr_led_GPIO_Port,pwr_led_Pin);
+			//sprintf((char*)TextOutBuf, "GPS_PPS\r\n");
+			//HAL_UART_Transmit(&huart1, TextOutBuf, sizeof(TextOutBuf), 1000);
+			data_ready=1;
+			//reset ctr
+			TIM2->CNT = 0; //reset the ctr
+			TIM2->CR1 |= 0x01;
+
+			//after we print, set the event stack back to 0;
+			Evt_stack=0;
+
+			//TIM2->CCMR1 |= TIM_CCMR1_CC1S_0;
+			//TIM2->CCER |= TIM_CCER_CC1E;
+			//TIM2->CR1 |= TIM_CR1_CEN;
+			//TIM2->SR = ~TIM_SR_CC1IF;
+		}
+
+	}
+	else
+		//here we are in the event case. Which is all other times we execute this routine if channel 1 wasn't used.
+
+		//if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2)  // if interrput source is channel 2, cosmic event
+	{
+		HAL_GPIO_WritePin(evt_led_GPIO_Port,evt_led_Pin, GPIO_PIN_SET);
+
+		//debugPrint(&huart1, "evt\r\n");
+
+
+		//when we have an event, we read the timer into the nth slot of the stack.
+		if (pps_started)
+		{
+			Evt_stack++; // we put event 1 in bin 1, the 0th value of the array is not used.
+			Evt_timestamps[Evt_stack] = HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_2);  // capture the first value
+
+		}
+		HAL_GPIO_WritePin(evt_led_GPIO_Port,evt_led_Pin, GPIO_PIN_SET);
+		//if (Evt_stack>30) sprintf((char*)TextOutBuf, "Event overflow");
+
+		//HAL_GPIO_WritePin(evt_led_GPIO_Port, evt_led_Pin,  GPIO_PIN_SET); //set event pin, we'll reset it in the main loop after a v. short delay.
+
+	}
+	//data_ready=1;
+	HAL_NVIC_EnableIRQ(TIM2_IRQn); //disable interrupts on call, regardless of type. renable at the end.
+	//HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+
+}
 /* USER CODE END 0 */
 
 /**
@@ -108,19 +268,53 @@ int main(void)
   MX_USART1_UART_Init();
   MX_IWDG_Init();
   /* USER CODE BEGIN 2 */
-/*
- * HAL_GPIO_WritePin(inj_led_GPIO_Port,inj_led_Pin, GPIO_PIN_SET);
- * HAL_GPIO_WritePin(evt_led_GPIO_Port,evt_led_Pin, GPIO_PIN_SET);
-*/
+  //HAL_Delay(1500);
+  HAL_GPIO_WritePin(pwr_led_GPIO_Port, pwr_led_Pin, GPIO_PIN_SET);
+  debugPrint(&huart1, "Cosmic Pi Version 2 startup \r\n"); // print
+  debugPrint(&huart1, "Firmware Version 27/10/24 \r\n");
+
+  debugPrint(&huart1, "Timer init - GPS PPS is needed\r\n");
+  HAL_TIM_IC_Start(&htim2, TIM_CHANNEL_1); //gps pps timer routine
+  HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_1); //gps pps timer routine
+  //TIM_Cmd(TIM2, ENABLE);
+  TIM2->CR1 |= 0x01;
+  //debugPrint(&huart1, "timer init - EVT\r\n");
+  HAL_TIM_IC_Start(&htim2, TIM_CHANNEL_2); //gps pps timer routine
+  HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_2); //event timer routine
+  TIM2->CR1 |= 0x01;
+
+  //HAL_TIM_Base_Start();
+  HAL_TIM_Base_Start(&htim2);
+  HAL_TIM_Base_Start_IT(&htim2);
+  debugPrint(&huart1, "Enable interrupts...\r\n");
+  HAL_NVIC_EnableIRQ(TIM2_IRQn);
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	  WatchdogRefresh();
+	  HAL_GPIO_WritePin(evt_led_GPIO_Port, evt_led_Pin,  GPIO_PIN_RESET);
+	  //debugPrint(&huart1, "mainloop\r\n");
+	  if (pps_started)
+	  		{
+		  debugPrint(&huart1, "pps+\r\n");
+		  }
+	  else
+	  {
+		  debugPrint(&huart1, "pps-\r\n");
+	  }
+		if (data_ready) {
+			HAL_NVIC_DisableIRQ(TIM2_IRQn); //disable interrupts on call, regardless of type. renable at the end.
+			HAL_UART_Transmit(&huart1, TextOutBuf, strlen(TextOutBuf), 100); //send one char at a time when idle.
+			WatchdogRefresh();
+			HAL_NVIC_EnableIRQ(TIM2_IRQn); //disable interrupts on call, regardless of type. renable at the end.
+
+			data_ready = 0;
+		}
     /* USER CODE END WHILE */
-	HAL_GPIO_TogglePin(inj_led_GPIO_Port, inj_led_Pin);
-    HAL_Delay(500);
 
 
     /* USER CODE BEGIN 3 */
@@ -197,15 +391,15 @@ static void MX_ADC1_Init(void)
   hadc1.Instance = ADC1;
   hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
   hadc1.Init.Resolution = ADC_RESOLUTION_12B;
-  hadc1.Init.ScanConvMode = DISABLE;
-  hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.ScanConvMode = ENABLE;
+  hadc1.Init.ContinuousConvMode = ENABLE;
   hadc1.Init.DiscontinuousConvMode = DISABLE;
   hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
   hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
   hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc1.Init.NbrOfConversion = 1;
-  hadc1.Init.DMAContinuousRequests = DISABLE;
-  hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  hadc1.Init.NbrOfConversion = 2;
+  hadc1.Init.DMAContinuousRequests = ENABLE;
+  hadc1.Init.EOCSelection = ADC_EOC_SEQ_CONV;
   if (HAL_ADC_Init(&hadc1) != HAL_OK)
   {
     Error_Handler();
@@ -216,6 +410,14 @@ static void MX_ADC1_Init(void)
   sConfig.Channel = ADC_CHANNEL_4;
   sConfig.Rank = 1;
   sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
+  */
+  sConfig.Rank = 2;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -274,9 +476,9 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 0;
+  htim2.Init.Prescaler = 1;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 42000000;
+  htim2.Init.Period = 42500000;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
@@ -330,6 +532,7 @@ static void MX_TIM3_Init(void)
 
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
 
   /* USER CODE BEGIN TIM3_Init 1 */
 
@@ -337,7 +540,7 @@ static void MX_TIM3_Init(void)
   htim3.Instance = TIM3;
   htim3.Init.Prescaler = 0;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 65535;
+  htim3.Init.Period = 0;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
@@ -355,10 +558,18 @@ static void MX_TIM3_Init(void)
   {
     Error_Handler();
   }
+	sConfigOC.OCMode = TIM_OCMODE_PWM1;
+	sConfigOC.Pulse = 0;
+	sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+	sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+	if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+	{
+		Error_Handler();
+	}
   /* USER CODE BEGIN TIM3_Init 2 */
 
   /* USER CODE END TIM3_Init 2 */
-
+	//HAL_TIM_MspPostInit(&htim3);
 }
 
 /**
@@ -404,6 +615,9 @@ static void MX_DMA_Init(void)
   __HAL_RCC_DMA2_CLK_ENABLE();
 
   /* DMA interrupt init */
+  /* DMA2_Stream0_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Stream0_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Stream0_IRQn);
   /* DMA2_Stream7_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA2_Stream7_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(DMA2_Stream7_IRQn);
@@ -430,6 +644,9 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, RPI_extra_Pin|inj_led_Pin|pwr_led_Pin|evt_led_Pin, GPIO_PIN_RESET);
 
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOC, ch_b_or_Pin|ch_a_or_Pin, GPIO_PIN_RESET);
+
   /*Configure GPIO pins : RPI_extra_Pin inj_led_Pin pwr_led_Pin evt_led_Pin */
   GPIO_InitStruct.Pin = RPI_extra_Pin|inj_led_Pin|pwr_led_Pin|evt_led_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -437,32 +654,17 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : gpstx_Pin */
-  GPIO_InitStruct.Pin = gpstx_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-  GPIO_InitStruct.Alternate = GPIO_AF7_USART2;
-  HAL_GPIO_Init(gpstx_GPIO_Port, &GPIO_InitStruct);
-
   /*Configure GPIO pin : flag_Pin */
   GPIO_InitStruct.Pin = flag_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(flag_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PB13 */
-  GPIO_InitStruct.Pin = GPIO_PIN_13;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  /*Configure GPIO pins : ch_b_or_Pin ch_a_or_Pin */
+  GPIO_InitStruct.Pin = ch_b_or_Pin|ch_a_or_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-  GPIO_InitStruct.Alternate = GPIO_AF5_SPI2;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : CH_A_OR_Pin CH_B_OR_Pin */
-  GPIO_InitStruct.Pin = CH_A_OR_Pin|CH_B_OR_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
