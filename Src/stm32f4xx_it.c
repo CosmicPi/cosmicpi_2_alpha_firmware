@@ -51,11 +51,16 @@
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+uint32_t read_TIM2() {
+  return TIM2->CNT;
+}
 
+uint32_t int_val_TIM2() {
+  return TIM2->CCR1;
+}
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
-extern DMA_HandleTypeDef hdma_adc1;
 extern TIM_HandleTypeDef htim2;
 extern DMA_HandleTypeDef hdma_usart1_tx;
 extern UART_HandleTypeDef huart1;
@@ -212,6 +217,58 @@ void TIM2_IRQHandler(void)
   HAL_TIM_IRQHandler(&htim2);
   /* USER CODE BEGIN TIM2_IRQn 1 */
 
+  //debugPrint(&huart1, "int_work\r\n");
+
+  //HAL_NVIC_DisableIRQ(TIM2_IRQn);
+  if(TIM2->SR & TIM_SR_CC1IF) {
+          pps_started = 1;
+          gps_timestamp = 0;
+          HAL_GPIO_TogglePin(pwr_led_GPIO_Port, pwr_led_Pin);
+
+          //TIM2->CNT = 0; //reset the ctr
+          gps_timestamp = HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_1);
+
+          //debugPrint(&huart1, "PPS running...\r\n");
+          uptime++;
+    	  sprintf((char *)TextOutBuf+strlen(TextOutBuf), "Uptime:%d; \r\n", uptime);
+    	  //sprintf((char *)TextOutBuf+strlen(TextOutBuf), " Timestamp %d \r\n", gps_timestamp);
+          data_ready = 1;
+          //TIM2->CR1 |= 0x01;
+          //__HAL_TIM_SET_COUNTER(&htim2,0);
+          //TIM2->EGR = TIM_EGR_UG;
+          TIM2->CNT = 0;
+          TIM2->CR1 |= 0x01;
+          TIM2->SR = ~TIM_SR_CC1IF;
+      }
+
+  if(TIM2->SR & TIM_SR_CC2IF) {
+	      //debugPrint(&huart1, "Evt \r\n");
+	  	  evt_timestamp = HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_2);
+	  	  //HAL_TIM_Set_Counter
+	  	  HAL_GPIO_WritePin(evt_led_GPIO_Port, evt_led_Pin, GPIO_PIN_SET);
+          //HAL_Delay(5);
+          //HAL_GPIO_TogglePin(evt_led_GPIO_Port, evt_led_Pin);
+          sprintf((char *)TextOutBuf+strlen(TextOutBuf), "Event:%d/42000000; \r\n", evt_timestamp);
+
+          //debugPrint(&huart1, "PPS running...\r\n");\
+          gps_timestamp = HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_1);
+          //uptime++;
+    	  //sprintf(TextOutBuf, "Uptime %d", uptime);
+    	  //sprintf(TextOutBuf, "Timestamp %d", gps_timestamp);
+          //TIM2->CNT = 0; //reset the ctr
+          //TIM2->CR1 |= 0x01;
+          TIM2->SR = ~TIM_SR_CC2IF;
+      }
+  //HAL_NVIC_EnableIRQ(TIM2_IRQn);
+  //if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1)  // if interrput source is channel 1
+//  	{
+  		//pps_started = 1;
+
+
+
+  //TIM2->CNT = 0; //reset the ctr
+  //TIM2->CR1 |= 0x01;
+
   /* USER CODE END TIM2_IRQn 1 */
 }
 
@@ -227,20 +284,6 @@ void USART1_IRQHandler(void)
   /* USER CODE BEGIN USART1_IRQn 1 */
 
   /* USER CODE END USART1_IRQn 1 */
-}
-
-/**
-  * @brief This function handles DMA2 stream0 global interrupt.
-  */
-void DMA2_Stream0_IRQHandler(void)
-{
-  /* USER CODE BEGIN DMA2_Stream0_IRQn 0 */
-
-  /* USER CODE END DMA2_Stream0_IRQn 0 */
-  HAL_DMA_IRQHandler(&hdma_adc1);
-  /* USER CODE BEGIN DMA2_Stream0_IRQn 1 */
-
-  /* USER CODE END DMA2_Stream0_IRQn 1 */
 }
 
 /**
